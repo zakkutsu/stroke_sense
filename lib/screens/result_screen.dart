@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math'; // Untuk Point
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // Untuk kIsWeb
 import 'package:stroke_sense/models/analysis_result.dart';
@@ -84,17 +85,30 @@ class _ResultScreenState extends State<ResultScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. TAMPILKAN FOTO USER
+            // 1. TAMPILKAN FOTO USER + OVERLAY MARKING
             Container(
-              height: 250,
+              height: 400, // Tinggi lebih besar agar detail terlihat
               color: Colors.black,
               child: kIsWeb
                   ? const Center(
                       child: Icon(Icons.image, size: 80, color: Colors.white54),
                     )
-                  : Image.file(
-                      File(widget.imagePath),
-                      fit: BoxFit.contain, // Agar seluruh foto terlihat
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Gambar Asli
+                        Image.file(
+                          File(widget.imagePath),
+                          fit: BoxFit.contain,
+                        ),
+                        // Layer Overlay Garis (Marking)
+                        CustomPaint(
+                          painter: ResultOverlayPainter(
+                            lines: widget.result.linesToDraw ?? [],
+                            score: widget.result.overallScore,
+                          ),
+                        ),
+                      ],
                     ),
             ),
 
@@ -221,4 +235,124 @@ class _ResultScreenState extends State<ResultScreen> {
       ),
     );
   }
+}
+
+// ========================================
+// CUSTOM PAINTER untuk OVERLAY GARIS
+// ========================================
+class ResultOverlayPainter extends CustomPainter {
+  final List<List<Point<int>>> lines;
+  final double score;
+
+  ResultOverlayPainter({required this.lines, required this.score});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (lines.isEmpty) return;
+
+    // 1. SETUP PEN (PENA GAMBAR)
+    final isGood = score > 70;
+    final paintColor = isGood ? Colors.green : Colors.red;
+    
+    final linePaint = Paint()
+      ..color = paintColor.withOpacity(0.8)
+      ..strokeWidth = 3.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    // Setup Text Style untuk Angka
+    final textStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 12,
+      fontWeight: FontWeight.bold,
+      backgroundColor: Colors.black54, // Latar belakang hitam transparan biar terbaca
+    );
+
+    // 2. HITUNG SKALA (PENTING!)
+    // Asumsi: Image Processor resize gambar ke lebar 500px.
+    // Kita harus skalakan koordinatnya agar pas di layar HP.
+    double scaleX = size.width / 500.0;
+    // Kita asumsikan gambar full width, scaling Y mengikuti X (aspect ratio lock)
+    double scaleY = scaleX; 
+
+    // Variable untuk menyimpan posisi tengah setiap garis (untuk hitung jarak)
+    List<double> lineCentroidsX = [];
+
+    // 3. LOOP MENGGAMBAR GARIS
+    for (var linePoints in lines) {
+      if (linePoints.length < 2) continue;
+
+      final path = Path();
+      double sumX = 0;
+
+      // Pindahkan ke titik awal
+      path.moveTo(linePoints[0].x * scaleX, linePoints[0].y * scaleY);
+      sumX += linePoints[0].x;
+
+      // Tarik garis
+      for (int i = 1; i < linePoints.length; i++) {
+        double px = linePoints[i].x * scaleX;
+        double py = linePoints[i].y * scaleY;
+        path.lineTo(px, py);
+        sumX += linePoints[i].x;
+      }
+
+      // Gambar Garis Visual (Merah/Hijau)
+      canvas.drawPath(path, linePaint);
+
+      // Simpan rata-rata posisi X garis ini untuk hitung jarak spasi nanti
+      lineCentroidsX.add((sumX / linePoints.length) * scaleX);
+    }
+
+    // 4. GAMBAR ANGKA JARAK (SPASI) ANTAR GARIS
+    // Kita butuh minimal 2 garis untuk hitung jarak
+    if (lineCentroidsX.length > 1) {
+      // Urutkan posisi garis dari kiri ke kanan
+      lineCentroidsX.sort();
+
+      for (int i = 0; i < lineCentroidsX.length - 1; i++) {
+        double currentLineX = lineCentroidsX[i];
+        double nextLineX = lineCentroidsX[i+1];
+        
+        // Hitung jarak (gap)
+        double gap = nextLineX - currentLineX;
+        
+        // Titik tengah celah (untuk menaruh teks)
+        double midX = currentLineX + (gap / 2);
+        double midY = size.height / 2; // Taruh angka di tengah vertikal layar
+
+        // Gambar Garis Dimensi Tipis (Penanda Jarak)
+        final dimPaint = Paint()
+          ..color = Colors.yellowAccent.withOpacity(0.7)
+          ..strokeWidth = 1;
+        
+        // Garis horizontal antar 2 garis utama
+        canvas.drawLine(
+          Offset(currentLineX, midY), 
+          Offset(nextLineX, midY), 
+          dimPaint
+        );
+
+        // Tulis Angka Jarak
+        // Konversi pixel ke "satuan relatif" biar angkanya enak dilihat (misal dibagi 10)
+        String textLabel = "${(gap / 10).toStringAsFixed(1)}mm"; 
+
+        final textSpan = TextSpan(text: textLabel, style: textStyle);
+        final textPainter = TextPainter(
+          text: textSpan,
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+
+        // Gambar teks tepat di tengah gap
+        textPainter.paint(
+          canvas, 
+          Offset(midX - (textPainter.width / 2), midY - 15) // Geser dikit ke atas garis
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

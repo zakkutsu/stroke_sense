@@ -1,121 +1,169 @@
+import 'dart:math';
 import 'package:image/image.dart' as img;
 import 'package:stroke_sense/models/analysis_result.dart';
 import 'base_processor.dart';
-import 'dart:math';
 
 /// Processor khusus untuk analisis bentuk tertutup (lingkaran/oval)
 /// Digunakan untuk: Roda (OOOO), Telur (0000)
+/// Menggunakan Algoritma "Radar 360°"
 class GeometricShapeProcessor implements ShapeProcessor {
+  final String subType; // 'roda' atau 'telur'
+  
+  GeometricShapeProcessor({this.subType = 'roda'});
+
   @override
   AnalysisResult analyze(img.Image image) {
-    // === STEP 1: Cari Centroid (Titik Pusat Massa) ===
-    int sumX = 0, sumY = 0, pixelCount = 0;
-    List<Point> inkPixels = [];
+    // 1. CARI SEMUA PIXEL TINTA & TITIK PUSAT (CENTROID)
+    int sumX = 0, sumY = 0;
+    List<Point<int>> inkPixels = [];
 
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
+    // Kita scan seluruh gambar (skip 2px biar cepat tapi tetap akurat)
+    for (int y = 0; y < image.height; y += 2) {
+      for (int x = 0; x < image.width; x += 2) {
         if (ProcessorUtils.isInk(image, x, y)) {
           sumX += x;
           sumY += y;
-          pixelCount++;
           inkPixels.add(Point(x, y));
         }
       }
     }
 
-    if (pixelCount == 0) return ProcessorUtils.errorResult();
-
-    double centerX = sumX / pixelCount;
-    double centerY = sumY / pixelCount;
-
-    // === STEP 2: Hitung Jarak Setiap Pixel Tinta ke Pusat (Radius) ===
-    List<double> radii = [];
-    for (var p in inkPixels) {
-      double r = sqrt(pow(p.x - centerX, 2) + pow(p.y - centerY, 2));
-      radii.add(r);
+    // Validasi: Kalau tinta terlalu sedikit, anggap kosong
+    if (inkPixels.length < 100) {
+      return ProcessorUtils.createErrorResult("Bentuk tidak terlihat jelas.");
     }
 
-    double avgRadius = ProcessorUtils.average(radii);
-    double stdDev = ProcessorUtils.standardDeviation(radii);
+    // Koordinat Pusat Gravitasi (Centroid)
+    double centerX = sumX / inkPixels.length;
+    double centerY = sumY / inkPixels.length;
 
-    // === STEP 3: Analisis Kebulatan (Roundness) ===
-    // Standar Deviasi rendah = radius konsisten = bulat sempurna
-    // StdDev 0-2 = Perfect Circle
-    // StdDev 5-10 = Agak lonjong
-    // StdDev >15 = Bentuk tidak beraturan
+    // 2. HITUNG JARI-JARI (RADIUS) & SUDUT (ANGLE) UNTUK SETIAP TITIK
+    List<double> radii = [];
+    double totalRadius = 0;
     
-    double roundnessScore = (100 - (stdDev * 5)).clamp(0, 100);
+    // Kita butuh data pixel yang 'diurutkan' berdasarkan sudut agar visualisasinya nyambung
+    // Map<Sudut, Point>
+    List<_PolarPoint> polarPoints = [];
 
-    // === STEP 4: Analisis Kelengkapan (Completeness) ===
-    // Cek apakah lingkaran tertutup penuh atau ada gap
-    double completenessScore = _analyzeCompleteness(inkPixels, centerX, centerY, avgRadius);
+    for (var p in inkPixels) {
+      double dx = p.x - centerX;
+      double dy = p.y - centerY;
+      
+      // Jarak ke pusat (Pythagoras)
+      double r = sqrt((dx * dx) + (dy * dy));
+      
+      // Sudut (Atan2 returns -PI to +PI)
+      double angle = atan2(dy, dx); 
 
-    // === STEP 5: Analisis Ukuran (Size Consistency) ===
-    // Cek apakah semua lingkaran (jika ada banyak) ukurannya sama
-    double sizeScore = 85; // Placeholder (bisa dikembangkan untuk multi-circle)
+      radii.add(r);
+      totalRadius += r;
+      polarPoints.add(_PolarPoint(p, angle, r));
+    }
 
-    // === SKOR FINAL ===
-    double finalScore = (roundnessScore * 0.6) + (completenessScore * 0.3) + (sizeScore * 0.1);
-    finalScore = finalScore.clamp(0, 100);
+    double avgRadius = totalRadius / radii.length;
 
-    // === FEEDBACK ===
+    // 3. HITUNG TINGKAT "KEBULATAN" (ROUNDNESS)
+    // Menggunakan Standar Deviasi Jari-jari.
+    // Lingkaran sempurna: Deviasi 0 (semua jari-jari sama).
+    double sumVariance = 0;
+    for (var r in radii) {
+      sumVariance += pow(r - avgRadius, 2);
+    }
+    double stdDev = sqrt(sumVariance / radii.length);
+
+    // Rasio Deviasi terhadap Radius (Coefficient of Variation)
+    // Biar lingkaran besar dan kecil dinilai adil.
+    double cv = (stdDev / avgRadius) * 100; 
+
+    // 4. CEK KELENGKAPAN (CLOSURE)
+    // Apakah lingkarannya putus (seperti huruf C)?
+    // Kita cek apakah ada "bucket" sudut yang kosong.
+    // Kita bagi 360 derajat jadi 36 sektor (per 10 derajat).
+    Set<int> filledSectors = {};
+    for (var pp in polarPoints) {
+      // Normalisasi sudut -PI..PI ke 0..360
+      double deg = (pp.angle * 180 / pi);
+      if (deg < 0) deg += 360;
+      int sector = (deg / 10).floor(); // 0 sampai 35
+      filledSectors.add(sector);
+    }
+    int gapCount = 36 - filledSectors.length; // Berapa sektor yang bolong?
+
+    // 5. SCORING FORMULA
+    
+    // Skor Kebulatan (Roundness)
+    // CV < 5% = Bagus (Skor 100). CV > 20% = Jelek (Skor 40).
+    double roundnessScore = (100 - ((cv - 5) * 4.0)).clamp(0, 100);
+    if (cv <= 5) roundnessScore = 100;
+
+    // Skor Penutupan (Closure)
+    // Tiap sektor bolong (10 derajat) mengurangi nilai drastis
+    double closureScore = (100 - (gapCount * 15.0)).clamp(0, 100);
+
+    // Skor Akhir
+    double finalScore = 0;
     String feedback = "";
-    if (finalScore > 90) {
-      feedback = "Luar biasa! Lingkaran sangat bulat dan sempurna.";
-    } else if (roundnessScore < 60) {
-      feedback = "Bentuk terlalu lonjong atau tidak beraturan. Coba kunci siku tangan dan putar dari bahu.";
-    } else if (completenessScore < 60) {
-      feedback = "Lingkaran belum tertutup sempurna. Ada gap di beberapa bagian.";
+
+    if (subType == 'roda') {
+      // Roda harus BULAT dan TERTUTUP
+      finalScore = (roundnessScore * 0.7) + (closureScore * 0.3);
+      
+      if (closureScore < 80) {
+        feedback = "Lingkaran terputus/tidak nyambung.";
+      } else if (roundnessScore < 60) {
+        feedback = "Bentuk lonjong/penyok. Jaga jarak ke pusat tetap sama.";
+      } else if (roundnessScore < 85) {
+        feedback = "Cukup bulat, tapi masih sedikit tidak rata.";
+      } else {
+        feedback = "Luar biasa! Lingkaran sempurna.";
+      }
+    } else if (subType == 'telur') {
+      // Telur MEMANG harus lonjong. Jadi kalau bulat sempurna malah salah.
+      // Kita targetkan CV sekitar 10-15% (oval).
+      double ovalDiff = (cv - 12).abs(); // Seberapa jauh dari "kelonjongan ideal"
+      finalScore = (100 - (ovalDiff * 5)).clamp(0, 100);
+      
+      if (cv < 8) {
+        feedback = "Terlalu bulat. Telur harus lonjong.";
+      } else if (cv > 20) {
+        feedback = "Bentuk terlalu pipih/rusak.";
+      } else {
+        feedback = "Bentuk oval yang bagus.";
+      }
     } else {
-      feedback = "Sedikit lonjong, tetap pertahankan pusat putaran.";
+      // Default for other shapes
+      finalScore = (roundnessScore * 0.7) + (closureScore * 0.3);
+      feedback = "Bentuk terdeteksi.";
+    }
+
+    // 6. PERSIAPAN VISUALISASI (AGAR GARIS MERAH/HIJAU NYAMBUNG)
+    // Urutkan titik berdasarkan sudutnya (-180 sampai +180)
+    polarPoints.sort((a, b) => a.angle.compareTo(b.angle));
+
+    // Convert balik ke List<Point> untuk dikirim ke UI
+    List<Point<int>> visualLine = polarPoints.map((e) => e.point).toList();
+
+    // Tutup loop visualisasi (sambungkan titik akhir ke awal)
+    if (visualLine.isNotEmpty && closureScore > 80) {
+      visualLine.add(visualLine.first);
     }
 
     return AnalysisResult(
       overallScore: finalScore,
-      verticalityScore: 0, // Tidak relevan untuk lingkaran
-      spacingScore: sizeScore,
-      consistencyScore: roundnessScore,
-      stabilityScore: completenessScore,
+      verticalityScore: 0, // Tidak relevan buat lingkaran
+      spacingScore: closureScore, // Kita pinjam field ini buat Closure
+      consistencyScore: roundnessScore, 
+      stabilityScore: roundnessScore,
       feedback: feedback,
+      linesToDraw: [visualLine], // Kirim sebagai 1 garis panjang melingkar
     );
   }
+}
 
-  /// Analisis kelengkapan lingkaran (apakah tertutup penuh?)
-  /// Metode: Sampling 360 derajat dari pusat, cek berapa % ada tinta
-  double _analyzeCompleteness(List<Point> inkPixels, double cx, double cy, double radius) {
-    if (radius < 5) return 50; // Radius terlalu kecil untuk dianalisis
-
-    int samplesPerDegree = 1; // Sampling tiap 1 derajat
-    int totalSamples = 360 * samplesPerDegree;
-    int hitCount = 0;
-
-    // Buat set untuk lookup cepat
-    Set<String> inkSet = inkPixels.map((p) => '${p.x},${p.y}').toSet();
-
-    for (int i = 0; i < totalSamples; i++) {
-      double angle = (i / samplesPerDegree) * (pi / 180); // Convert ke radian
-      
-      // Hitung posisi di lingkaran ideal
-      int x = (cx + radius * cos(angle)).round();
-      int y = (cy + radius * sin(angle)).round();
-      
-      // Cek apakah ada tinta di sekitar posisi ini (toleransi ±2 pixel)
-      bool foundInk = false;
-      for (int dx = -2; dx <= 2; dx++) {
-        for (int dy = -2; dy <= 2; dy++) {
-          if (inkSet.contains('${x + dx},${y + dy}')) {
-            foundInk = true;
-            break;
-          }
-        }
-        if (foundInk) break;
-      }
-      
-      if (foundInk) hitCount++;
-    }
-
-    // Persentase kelengkapan
-    double completeness = (hitCount / totalSamples) * 100;
-    return completeness.clamp(0, 100);
-  }
+// Class bantuan kecil untuk sorting
+class _PolarPoint {
+  final Point<int> point;
+  final double angle;
+  final double dist;
+  _PolarPoint(this.point, this.angle, this.dist);
 }

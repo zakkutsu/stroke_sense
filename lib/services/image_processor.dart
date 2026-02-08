@@ -17,7 +17,8 @@ class ImageProcessor {
     final cmd = img.Command()
       ..decodeImageFile(imagePath)
       ..grayscale() // Convert ke hitam-putih
-      ..adjustColor(contrast: 1.5); // Pertajam kontras tinta vs kertas
+      ..normalize(min: 0, max: 255) // Normalisasi histogram
+      ..adjustColor(contrast: 2.0, brightness: 1.1); // Kontras lebih tinggi
       
     await cmd.executeThread();
     img.Image? processedImage = cmd.outputImage;
@@ -49,7 +50,7 @@ class ImageProcessor {
       // LEVEL 3: BENTUK TERTUTUP
       case 'roda':
       case 'telur':
-        processor = GeometricShapeProcessor();
+        processor = GeometricShapeProcessor(subType: moduleId);
         break;
         
       // LEVEL 4: SUDUT & PRESISI

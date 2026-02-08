@@ -10,9 +10,10 @@ abstract class ShapeProcessor {
 /// Utilities: Fungsi bantuan yang bisa dipakai oleh semua processor
 class ProcessorUtils {
   /// Deteksi apakah pixel ini tinta (gelap)
-  /// Threshold: luminance < 100 = tinta hitam
+  /// Threshold: luminance < 150 = tinta hitam
+  /// NAIK dari 100 ke 150 untuk support kertas abu-abu/tidak putih sempurna
   static bool isInk(img.Image image, int x, int y) {
-    return image.getPixel(x, y).luminance < 100;
+    return image.getPixel(x, y).luminance < 150;
   }
 
   /// Cari posisi X tengah dari garis tinta di baris Y tertentu
@@ -62,6 +63,18 @@ class ProcessorUtils {
       consistencyScore: 0,
       stabilityScore: 0,
       feedback: "Gagal mendeteksi goresan. Gunakan tinta gelap di kertas terang.",
+    );
+  }
+
+  /// Generate result error dengan custom message
+  static AnalysisResult createErrorResult(String message) {
+    return AnalysisResult(
+      overallScore: 0,
+      verticalityScore: 0,
+      spacingScore: 0,
+      consistencyScore: 0,
+      stabilityScore: 0,
+      feedback: message,
     );
   }
 }
