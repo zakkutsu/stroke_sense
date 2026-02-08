@@ -19,6 +19,10 @@ android {
         jvmTarget = JavaVersion.VERSION_11.toString()
     }
 
+    tasks.withType<JavaCompile> {
+        options.compilerArgs.add("-Xlint:-options")
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.stroke_sense"
@@ -37,14 +41,37 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
-
-    applicationVariants.all {
-        outputs.all {
-            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName = "StrokeSense.apk"
-        }
-    }
 }
 
 flutter {
     source = "../.."
+}
+
+// Task untuk copy dan rename APK dengan nama custom
+tasks.register("renameAPK") {
+    doLast {
+        val buildOutputs = file("$buildDir/outputs/flutter-apk")
+        if (buildOutputs.exists()) {
+            val debugApk = file("$buildOutputs/app-debug.apk")
+            val releaseApk = file("$buildOutputs/app-release.apk")
+            
+            if (debugApk.exists()) {
+                val newName = file("$buildOutputs/StrokeSense-debug.apk")
+                debugApk.copyTo(newName, overwrite = true)
+                println("✅ Debug APK renamed to: ${newName.name}")
+            }
+            
+            if (releaseApk.exists()) {
+                val newName = file("$buildOutputs/StrokeSense-release.apk")
+                releaseApk.copyTo(newName, overwrite = true)
+                println("✅ Release APK renamed to: ${newName.name}")
+            }
+        }
+    }
+}
+
+// Auto-run rename after assembleDebug and assembleRelease
+afterEvaluate {
+    tasks.findByName("assembleDebug")?.finalizedBy("renameAPK")
+    tasks.findByName("assembleRelease")?.finalizedBy("renameAPK")
 }
