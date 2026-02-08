@@ -44,7 +44,7 @@ class ImageProcessor {
       // LEVEL 2: LENGKUNGAN
       case 'ombak':
       case 'kawat':
-        processor = CurveProcessor();
+        processor = CurveProcessor(moduleId); // Serahkan ke Ahli Kurva
         break;
         
       // LEVEL 3: BENTUK TERTUTUP

@@ -1,250 +1,190 @@
+import 'dart:math';
 import 'package:image/image.dart' as img;
 import 'package:stroke_sense/models/analysis_result.dart';
 import 'base_processor.dart';
-import 'dart:math';
 
-/// Processor khusus untuk analisis sudut tajam dan presisi titik
-/// Digunakan untuk: Gergaji (/\/\/\), Rintik (• • • •)
 class AngleProcessor implements ShapeProcessor {
-  final String moduleId;
+  final String subType; // 'rintik' atau 'gergaji'
   
-  AngleProcessor(this.moduleId);
+  AngleProcessor(this.subType);
 
   @override
   AnalysisResult analyze(img.Image image) {
-    if (moduleId == 'rintik') {
-      return _analyzeRintik(image);
+    if (subType == 'rintik') {
+      return _analyzeDots(image);
     } else {
-      return _analyzeGergaji(image);
+      return _analyzeZigzag(image);
     }
   }
 
-  /// Analisis untuk modul Gergaji (Zigzag)
-  /// Fokus: Ketajaman sudut & konsistensi perubahan arah
-  AnalysisResult _analyzeGergaji(img.Image image) {
-    // === STEP 1: Extract Zigzag Signal ===
-    List<double> signalY = [];
+  // ==========================================
+  // LOGIKA 1: RINTIK / TITIK-TITIK
+  // ==========================================
+  AnalysisResult _analyzeDots(img.Image image) {
+    // Kita scan baris tengah (50%)
+    int yMid = image.height ~/ 2;
+    List<int> inkX = [];
     
-    for (int x = 0; x < image.width; x += 2) {
-      int inkYSum = 0;
-      int inkCount = 0;
-      
-      for (int y = 0; y < image.height; y++) {
-        if (ProcessorUtils.isInk(image, x, y)) {
-          inkYSum += y;
-          inkCount++;
+    // Scan baris tengah
+    for (int x = 0; x < image.width; x++) {
+      if (ProcessorUtils.isInk(image, x, yMid)) {
+        inkX.add(x);
+      }
+    }
+
+    if (inkX.isEmpty) return _error("Tidak ada titik terdeteksi.");
+
+    // Kelompokkan pixel yang berdekatan menjadi 1 "Titik" (Blob Detection)
+    List<Point<int>> dots = [];
+    List<int> currentBlob = [];
+    
+    for (int x in inkX) {
+      if (currentBlob.isEmpty) {
+        currentBlob.add(x);
+      } else {
+        if (x - currentBlob.last < 10) { // Jika jarak < 10px, masih 1 titik yang sama
+          currentBlob.add(x);
+        } else {
+          // Titik selesai, hitung tengahnya
+          int centerX = (currentBlob.first + currentBlob.last) ~/ 2;
+          dots.add(Point(centerX, yMid));
+          currentBlob = [x]; // Mulai titik baru
         }
       }
+    }
+    // Masukkan blob terakhir
+    if (currentBlob.isNotEmpty) {
+      int centerX = (currentBlob.first + currentBlob.last) ~/ 2;
+      dots.add(Point(centerX, yMid));
+    }
+
+    // --- SCORING RINTIK ---
+    int dotCount = dots.length;
+    double countScore = 0;
+    
+    // Target: Minimal 3 titik, Maksimal 10 titik (biar gak semrawut)
+    if (dotCount >= 3 && dotCount <= 8) countScore = 100;
+    else if (dotCount < 3) countScore = 30; // Terlalu sedikit
+    else countScore = 60; // Kebanyakan
+
+    // Cek Jarak Antar Titik (Spacing Consistency)
+    double spacingScore = 100;
+    if (dotCount > 1) {
+      List<int> gaps = [];
+      for (int i = 0; i < dotCount - 1; i++) {
+        gaps.add(dots[i+1].x - dots[i].x);
+      }
+      double avgGap = gaps.reduce((a, b) => a + b) / gaps.length;
+      double variance = 0;
+      for (var g in gaps) variance += pow(g - avgGap, 2);
+      double stdDev = sqrt(variance / gaps.length);
       
-      if (inkCount > 0) {
-        signalY.add(inkYSum / inkCount);
-      }
+      spacingScore = (100 - (stdDev * 5.0)).clamp(0, 100);
     }
 
-    if (signalY.length < 30) return ProcessorUtils.errorResult();
-
-    // === STEP 2: Deteksi Titik Balik (Direction Changes) ===
-    List<int> peakIndices = []; // Puncak (sudut atas)
-    List<int> valleyIndices = []; // Lembah (sudut bawah)
-    
-    for (int i = 1; i < signalY.length - 1; i++) {
-      // Peak: Y kecil (atas)
-      if (signalY[i] < signalY[i - 1] && signalY[i] < signalY[i + 1]) {
-        peakIndices.add(i);
-      }
-      // Valley: Y besar (bawah)
-      if (signalY[i] > signalY[i - 1] && signalY[i] > signalY[i + 1]) {
-        valleyIndices.add(i);
-      }
-    }
-
-    int totalAngles = peakIndices.length + valleyIndices.length;
-    if (totalAngles < 3) {
-      return AnalysisResult(
-        overallScore: 20,
-        verticalityScore: 0,
-        spacingScore: 0,
-        consistencyScore: 0,
-        stabilityScore: 0,
-        feedback: "Pola zigzag tidak terdeteksi. Buat sudut lebih tajam.",
-      );
-    }
-
-    // === STEP 3: Analisis Ketajaman Sudut ===
-    // Sudut tajam = perubahan Y yang drastis dalam jarak X pendek
-    List<double> sharpnessList = [];
-    
-    for (int i = 1; i < signalY.length - 1; i++) {
-      double angle = (signalY[i - 1] - signalY[i]).abs() + (signalY[i + 1] - signalY[i]).abs();
-      sharpnessList.add(angle);
-    }
-    
-    double avgSharpness = ProcessorUtils.average(sharpnessList);
-    // Sharpness tinggi = sudut tajam (bagus untuk zigzag)
-    double sharpnessScore = (avgSharpness * 2).clamp(0, 100);
-
-    // === STEP 4: Konsistensi Amplitudo ===
-    List<double> amplitudes = [];
-    int minLength = min(peakIndices.length, valleyIndices.length);
-    
-    for (int i = 0; i < minLength; i++) {
-      double amp = (signalY[valleyIndices[i]] - signalY[peakIndices[i]]).abs();
-      amplitudes.add(amp);
-    }
-    
-    double amplitudeScore = 80;
-    if (amplitudes.length >= 2) {
-      double stdDev = ProcessorUtils.standardDeviation(amplitudes);
-      amplitudeScore = (100 - (stdDev * 0.5)).clamp(0, 100);
-    }
-
-    // === STEP 5: Konsistensi Frekuensi (Jarak antar sudut) ===
-    List<double> wavelengths = [];
-    for (int i = 0; i < peakIndices.length - 1; i++) {
-      wavelengths.add((peakIndices[i + 1] - peakIndices[i]).toDouble());
-    }
-    
-    double frequencyScore = 80;
-    if (wavelengths.length >= 2) {
-      double stdDev = ProcessorUtils.standardDeviation(wavelengths);
-      frequencyScore = (100 - (stdDev * 0.3)).clamp(0, 100);
-    }
-
-    // === SKOR FINAL ===
-    double finalScore = (sharpnessScore * 0.4) + (amplitudeScore * 0.3) + (frequencyScore * 0.3);
-    finalScore = finalScore.clamp(0, 100);
-
+    double finalScore = (countScore * 0.4) + (spacingScore * 0.6);
     String feedback = "";
-    if (finalScore > 85) {
-      feedback = "Sempurna! Sudut zigzag tajam dan konsisten.";
-    } else if (sharpnessScore < 60) {
-      feedback = "Sudut kurang tajam. Buat perubahan arah lebih drastis.";
-    } else if (amplitudeScore < 60) {
-      feedback = "Tinggi zigzag tidak konsisten. Jaga amplitudo tetap sama.";
-    } else {
-      feedback = "Bagus, tingkatkan ketajaman sudut.";
-    }
-
-    return AnalysisResult(
-      overallScore: finalScore,
-      verticalityScore: 0,
-      spacingScore: frequencyScore,
-      consistencyScore: amplitudeScore,
-      stabilityScore: sharpnessScore,
-      feedback: feedback,
-    );
-  }
-
-  /// Analisis untuk modul Rintik (Titik-titik)
-  /// Fokus: Jarak antar titik, keseragaman ukuran, dan presisi penempatan
-  AnalysisResult _analyzeRintik(img.Image image) {
-    // === STEP 1: Deteksi Titik-titik (Connected Components) ===
-    List<Point> dotCenters = _findDotCenters(image);
-
-    if (dotCenters.length < 2) {
-      return AnalysisResult(
-        overallScore: 10,
-        verticalityScore: 0,
-        spacingScore: 0,
-        consistencyScore: 0,
-        stabilityScore: 0,
-        feedback: "Titik tidak terdeteksi. Pastikan ada minimal 3-4 titik terpisah.",
-      );
-    }
-
-    // === STEP 2: Analisis Jarak Antar Titik ===
-    List<double> distances = [];
-    for (int i = 0; i < dotCenters.length - 1; i++) {
-      double dist = sqrt(
-        pow(dotCenters[i + 1].x - dotCenters[i].x, 2) +
-        pow(dotCenters[i + 1].y - dotCenters[i].y, 2)
-      );
-      distances.add(dist);
-    }
-
-    // Calculate spacing consistency
-    double distanceStdDev = ProcessorUtils.standardDeviation(distances);
     
-    // Jarak konsisten = stdDev kecil
-    double spacingScore = (100 - (distanceStdDev * 0.5)).clamp(0, 100);
-
-    // === STEP 3: Analisis Kelurusan Horizontal ===
-    // Titik-titik idealnya sejajar horizontal (Y sama)
-    List<double> yPositions = dotCenters.map((p) => p.y.toDouble()).toList();
-    double yStdDev = ProcessorUtils.standardDeviation(yPositions);
-    
-    double alignmentScore = (100 - (yStdDev * 2)).clamp(0, 100);
-
-    // === STEP 4: Skor Akhir ===
-    double finalScore = (spacingScore * 0.6) + (alignmentScore * 0.4);
-    finalScore = finalScore.clamp(0, 100);
-
-    String feedback = "";
-    if (finalScore > 90) {
-      feedback = "Sempurna! Titik-titik sejajar dan jarak konsisten.";
-    } else if (spacingScore < 60) {
-      feedback = "Jarak antar titik tidak konsisten. Gunakan penggaris sebagai panduan.";
-    } else if (alignmentScore < 60) {
-      feedback = "Titik tidak sejajar horizontal. Jaga agar tetap lurus.";
-    } else {
-      feedback = "Bagus, tingkatkan presisi penempatan titik.";
-    }
+    if (countScore < 50) feedback = "Kurang banyak. Buat minimal 3 titik.";
+    else if (spacingScore < 60) feedback = "Jarak antar titik tidak rata.";
+    else feedback = "Presisi titik yang bagus!";
 
     return AnalysisResult(
       overallScore: finalScore,
       verticalityScore: 0,
       spacingScore: spacingScore,
-      consistencyScore: alignmentScore,
-      stabilityScore: finalScore,
+      consistencyScore: countScore,
+      stabilityScore: 100, // Titik pasti stabil
       feedback: feedback,
+      linesToDraw: [dots], // Kirim koordinat titik untuk digambar
     );
   }
 
-  /// Helper: Cari pusat setiap titik menggunakan connected component analysis
-  List<Point> _findDotCenters(img.Image image) {
-    List<Point> centers = [];
-    List<List<bool>> visited = List.generate(
-      image.height,
-      (_) => List.filled(image.width, false),
-    );
+  // ==========================================
+  // LOGIKA 2: GERGAJI / ZIGZAG (Tajam)
+  // ==========================================
+  AnalysisResult _analyzeZigzag(img.Image image) {
+    // 1. Ambil Sinyal Garis (Sama kayak Ombak)
+    List<Point<int>> signal = [];
+    for (int x = 0; x < image.width; x += 2) {
+      List<int> inkY = [];
+      for (int y = 0; y < image.height; y++) {
+        if (ProcessorUtils.isInk(image, x, y)) inkY.add(y);
+      }
+      if (inkY.isNotEmpty) {
+        int avgY = inkY.reduce((a, b) => a + b) ~/ inkY.length;
+        signal.add(Point(x, avgY));
+      }
+    }
 
-    for (int y = 0; y < image.height; y++) {
-      for (int x = 0; x < image.width; x++) {
-        if (!visited[y][x] && ProcessorUtils.isInk(image, x, y)) {
-          // Flood fill untuk cari satu blob
-          List<Point> blob = [];
-          _floodFill(image, x, y, visited, blob);
-          
-          // Hitung centroid blob ini
-          if (blob.length > 5) { // Minimal 5 pixel baru dianggap titik
-            int sumX = 0, sumY = 0;
-            for (var p in blob) {
-              sumX += p.x.toInt();
-              sumY += p.y.toInt();
-            }
-            centers.add(Point(sumX ~/ blob.length, sumY ~/ blob.length));
-          }
+    if (signal.length < 50) return _error("Garis terlalu pendek.");
+
+    // 2. Deteksi Puncak (Peaks)
+    List<Point<int>> peaks = [];
+    for (int i = 5; i < signal.length - 5; i++) {
+      int prev = signal[i-3].y;
+      int curr = signal[i].y;
+      int next = signal[i+3].y;
+      
+      // Puncak Atas (Lembah visual) atau Puncak Bawah (Gunung visual)
+      // Kita cari titik balik ekstrim
+      bool isTurn = (curr < prev && curr < next) || (curr > prev && curr > next);
+      
+      if (isTurn) {
+        // Filter jarak biar gak mendeteksi noise
+        if (peaks.isEmpty || (signal[i].x - peaks.last.x).abs() > 20) {
+          peaks.add(signal[i]);
         }
       }
     }
 
-    // Sort dari kiri ke kanan
-    centers.sort((a, b) => a.x.compareTo(b.x));
-    return centers;
+    if (peaks.length < 3) return _error("Buat minimal 3 lipatan tajam.");
+
+    // 3. Analisis Sudut (Sharpness)
+    // Kita cek kemiringan (slope) sebelum dan sesudah puncak.
+    // Jika gergaji tajam, perubahan slope harus DRASTIS.
+    double totalSharpness = 0;
+    
+    for (int i = 1; i < signal.length - 1; i++) {
+       // Hitung turunan (perubahan Y per X)
+       double slope1 = (signal[i].y - signal[i-1].y).toDouble();
+       double slope2 = (signal[i+1].y - signal[i].y).toDouble();
+       
+       // Perubahan kemiringan mendadak = Tajam
+       totalSharpness += (slope1 - slope2).abs();
+    }
+    
+    double avgSharpness = totalSharpness / signal.length;
+    // Gergaji butuh sharpness tinggi (> 0.5 rata-rata). Ombak biasanya < 0.2.
+    double sharpnessScore = (avgSharpness * 150).clamp(0, 100);
+
+    // Konsistensi Tinggi Puncak
+    List<int> ys = peaks.map((p) => p.y).toList();
+    double avgY = ys.reduce((a, b) => a + b) / ys.length;
+    double varY = 0;
+    for (var y in ys) varY += pow(y - avgY, 2);
+    double stdDevY = sqrt(varY / ys.length);
+    double heightScore = (100 - (stdDevY * 3.0)).clamp(0, 100);
+
+    double finalScore = (sharpnessScore * 0.6) + (heightScore * 0.4);
+    String feedback = "";
+
+    if (sharpnessScore < 50) feedback = "Sudut terlalu tumpul/membulat. Buat lebih tajam!";
+    else if (heightScore < 60) feedback = "Tinggi gergaji tidak rata.";
+    else feedback = "Tajam dan konsisten! Bagus.";
+
+    return AnalysisResult(
+      overallScore: finalScore,
+      verticalityScore: heightScore,
+      spacingScore: 80,
+      consistencyScore: finalScore,
+      stabilityScore: sharpnessScore,
+      feedback: feedback,
+      linesToDraw: [signal],
+    );
   }
 
-  /// Flood fill rekursif untuk cari connected component
-  void _floodFill(img.Image image, int x, int y, List<List<bool>> visited, List<Point> blob) {
-    if (x < 0 || x >= image.width || y < 0 || y >= image.height) return;
-    if (visited[y][x] || !ProcessorUtils.isInk(image, x, y)) return;
-
-    visited[y][x] = true;
-    blob.add(Point(x, y));
-
-    // 4-connectivity (atas, bawah, kiri, kanan)
-    _floodFill(image, x + 1, y, visited, blob);
-    _floodFill(image, x - 1, y, visited, blob);
-    _floodFill(image, x, y + 1, visited, blob);
-    _floodFill(image, x, y - 1, visited, blob);
+  AnalysisResult _error(String msg) {
+    return ProcessorUtils.createErrorResult(msg);
   }
 }

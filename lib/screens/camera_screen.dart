@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Untuk haptic feedback
 import 'package:flutter/foundation.dart'; // Untuk cek platform
 import 'package:stroke_sense/main.dart'; // Untuk ambil variable 'cameras'
 import 'package:stroke_sense/models/exercise_module.dart';
@@ -190,9 +191,38 @@ class _CameraScreenState extends State<CameraScreen> {
       );
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
+    // WRAP DENGAN POPSCOPE UNTUK KONFIRMASI EXIT
+    return PopScope(
+      canPop: false, // Kunci pintu keluar
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+
+        // Tampilkan Dialog Konfirmasi
+        final bool shouldPop = await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text("Batalkan Latihan?"),
+            content: const Text("Foto yang belum disimpan akan hilang."),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text("Lanjut Foto"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text("Keluar", style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+        ) ?? false;
+
+        if (mounted && shouldPop) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
         fit: StackFit.expand,
         children: [
           // 1. LAYER KAMERA (Paling Belakang)
@@ -253,24 +283,43 @@ class _CameraScreenState extends State<CameraScreen> {
                   padding: const EdgeInsets.only(bottom: 30),
                   child: GestureDetector(
                     onTap: () async {
+                      HapticFeedback.heavyImpact(); // Getaran berat saat jepret
                       try {
                         // 1. Ambil Gambar
                         final image = await _controller!.takePicture();
                         
                         if (!mounted) return;
 
-                        // 2. Tampilkan Loading (Dialog)
+                        // 2. Tampilkan Loading (Dialog) - Informatif
                         showDialog(
                           context: context,
                           barrierDismissible: false, // Tidak bisa ditutup user
-                          builder: (context) => const Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                CircularProgressIndicator(color: Colors.white),
-                                SizedBox(height: 15),
-                                Text("Sedang Menganalisis Goresan...", style: TextStyle(color: Colors.white))
-                              ],
+                          builder: (context) => Dialog(
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                            child: Padding(
+                              padding: const EdgeInsets.all(20.0),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const CircularProgressIndicator(),
+                                  const SizedBox(width: 20),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: const [
+                                      Text(
+                                        "Menganalisis...",
+                                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                      ),
+                                      SizedBox(height: 5),
+                                      Text(
+                                        "Sedang memeriksa kestabilan...",
+                                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         );
@@ -328,7 +377,8 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ],
       ),
-    );
+      ), // Tutup Scaffold
+    ); // Tutup PopScope
   }
 
   // Helper widget untuk instruksi web

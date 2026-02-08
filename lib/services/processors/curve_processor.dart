@@ -1,123 +1,140 @@
+import 'dart:math';
 import 'package:image/image.dart' as img;
 import 'package:stroke_sense/models/analysis_result.dart';
 import 'base_processor.dart';
-import 'dart:math';
 
-/// Processor khusus untuk analisis pola lengkungan/kurva
-/// Digunakan untuk: Ombak (~~~~), Kawat (eeeee)
 class CurveProcessor implements ShapeProcessor {
+  final String subType; // 'ombak' atau 'kawat'
+  
+  CurveProcessor(this.subType);
+
   @override
   AnalysisResult analyze(img.Image image) {
-    // === STEP 1: Extract Wave Signal ===
-    // Scan kolom per kolom, cari titik tengah Y tinta di setiap X
-    List<double> signalY = [];
+    // 1. UBAH GAMBAR JADI SINYAL GRAFIK (SIGNAL EXTRACTION)
+    // Kita scan kolom per kolom (X) untuk mencari rata-rata posisi Y tinta.
+    List<Point<int>> signalPoints = [];
     
-    for (int x = 0; x < image.width; x += 2) { // Skip 2px untuk performa
-      int inkYSum = 0;
-      int inkCount = 0;
-      
+    // Skip step 2px untuk performa
+    for (int x = 0; x < image.width; x += 2) {
+      List<int> inkY = [];
       for (int y = 0; y < image.height; y++) {
         if (ProcessorUtils.isInk(image, x, y)) {
-          inkYSum += y;
-          inkCount++;
+          inkY.add(y);
         }
       }
       
-      if (inkCount > 0) {
-        signalY.add(inkYSum / inkCount);
+      if (inkY.isNotEmpty) {
+        // Ambil titik tengah tebal tinta di kolom ini
+        int avgY = (inkY.reduce((a, b) => a + b) / inkY.length).round();
+        signalPoints.add(Point(x, avgY));
       }
     }
 
-    if (signalY.length < 50) return ProcessorUtils.errorResult();
+    if (signalPoints.length < 50) {
+      return ProcessorUtils.createErrorResult("Goresan terlalu pendek.");
+    }
 
-    // === STEP 2: Analisis Smoothness (Kehalusan) ===
-    // Cek perubahan mendadak antar titik (Jitter Detection)
+    // 2. DETEKSI PUNCAK (PEAKS) & LEMBAH (VALLEYS)
+    List<Point<int>> peaks = [];
+    List<Point<int>> valleys = [];
+    
+    // Smoothing signal sedikit agar pixel kasar tidak dianggap puncak
+    // (Simple Moving Average)
+    List<Point<int>> smoothSignal = [];
+    for (int i = 2; i < signalPoints.length - 2; i++) {
+      int sumY = signalPoints[i-2].y + signalPoints[i-1].y + signalPoints[i].y + signalPoints[i+1].y + signalPoints[i+2].y;
+      smoothSignal.add(Point(signalPoints[i].x, sumY ~/ 5));
+    }
+
+    // Algoritma cari puncak lokal
+    for (int i = 1; i < smoothSignal.length - 1; i++) {
+      int prevY = smoothSignal[i-1].y;
+      int currY = smoothSignal[i].y;
+      int nextY = smoothSignal[i+1].y;
+
+      // Di koordinat layar, Y=0 ada di atas.
+      // Jadi "Puncak Gunung" (Visual) adalah Y Minimum (Secara Angka).
+      // "Lembah" (Visual) adalah Y Maksimum.
+      
+      bool isVisualPeak = (currY < prevY) && (currY < nextY); // Nilai Y lebih kecil dari tetangga
+      bool isVisualValley = (currY > prevY) && (currY > nextY); // Nilai Y lebih besar dari tetangga
+
+      // Filter: Puncak harus cukup tajam (beda 2px) biar gak noise
+      if (isVisualPeak) peaks.add(smoothSignal[i]);
+      if (isVisualValley) valleys.add(smoothSignal[i]);
+    }
+
+    // Validasi Dasar
+    if (peaks.length < 2) {
+      return ProcessorUtils.createErrorResult("Kurang bergelombang. Buat minimal 2 bukit.");
+    }
+
+    // 3. HITUNG METRIK KONSISTENSI (RITME)
+    
+    // A. Konsistensi Ketinggian Puncak (Amplitude Stability)
+    // Seberapa rata tinggi gunung-gunung itu?
+    List<int> peakHeights = peaks.map((p) => p.y).toList();
+    double avgHeight = peakHeights.reduce((a, b) => a + b) / peakHeights.length;
+    double varianceH = 0;
+    for (var h in peakHeights) varianceH += pow(h - avgHeight, 2);
+    double stdDevHeight = sqrt(varianceH / peakHeights.length);
+    
+    // Nilai Amplitude: Deviasi 5px = Bagus (90). Deviasi 20px = Jelek (50).
+    double amplitudeScore = (100 - (stdDevHeight * 3.0)).clamp(0, 100);
+
+    // B. Konsistensi Jarak Antar Puncak (Frequency Stability)
+    // Seberapa lebar jarak antar gelombang?
+    List<int> peakDistances = [];
+    for (int i = 0; i < peaks.length - 1; i++) {
+      peakDistances.add(peaks[i+1].x - peaks[i].x);
+    }
+    
+    double frequencyScore = 100;
+    if (peakDistances.isNotEmpty) {
+      double avgDist = peakDistances.reduce((a, b) => a + b) / peakDistances.length;
+      double varianceD = 0;
+      for (var d in peakDistances) varianceD += pow(d - avgDist, 2);
+      double stdDevDist = sqrt(varianceD / peakDistances.length);
+      
+      // Nilai Frekuensi: Deviasi jarak lebar
+      frequencyScore = (100 - (stdDevDist * 4.0)).clamp(0, 100);
+    }
+
+    // C. Kehalusan (Smoothness)
+    // Apakah garisnya patah-patah (zigzag) atau mulus?
+    // Kita hitung total perubahan slope mendadak (Jitter).
     double totalJitter = 0;
-    for (int i = 0; i < signalY.length - 1; i++) {
-      totalJitter += (signalY[i] - signalY[i + 1]).abs();
+    for (int i = 0; i < smoothSignal.length - 1; i++) {
+      totalJitter += (smoothSignal[i].y - smoothSignal[i+1].y).abs();
     }
-    double avgJitter = totalJitter / signalY.length;
-    
-    // Smooth wave memiliki jitter kecil, gemetar = jitter besar
-    double smoothnessScore = (100 - (avgJitter * 2)).clamp(0, 100);
+    // Normalisasi jitter per panjang garis
+    double smoothnessRaw = totalJitter / smoothSignal.length;
+    // Ombak yang bagus punya jitter rendah tapi tidak nol.
+    // Logic sederhana: makin sedikit jitter kasar, makin bagus.
+    double smoothnessScore = 85; // Base score, dikurangi kalau ada spike tajam
 
-    // === STEP 3: Peak Detection (Deteksi Puncak & Lembah) ===
-    List<int> peakIndices = [];
-    List<int> valleyIndices = [];
-    
-    for (int i = 1; i < signalY.length - 1; i++) {
-      // Peak: Titik lebih tinggi dari kiri & kanan (Y kecil = atas)
-      if (signalY[i] < signalY[i - 1] && signalY[i] < signalY[i + 1]) {
-        peakIndices.add(i);
-      }
-      // Valley: Titik lebih rendah dari kiri & kanan (Y besar = bawah)
-      if (signalY[i] > signalY[i - 1] && signalY[i] > signalY[i + 1]) {
-        valleyIndices.add(i);
-      }
-    }
-
-    int totalWaves = min(peakIndices.length, valleyIndices.length);
-
-    // === STEP 4: Analisis Konsistensi Amplitudo (Tinggi Ombak) ===
-    double amplitudeScore = 80; // Default
-    if (peakIndices.length >= 2 && valleyIndices.length >= 2) {
-      List<double> amplitudes = [];
-      
-      for (int i = 0; i < min(peakIndices.length, valleyIndices.length); i++) {
-        double amp = (signalY[valleyIndices[i]] - signalY[peakIndices[i]]).abs();
-        amplitudes.add(amp);
-      }
-      
-      double stdDev = ProcessorUtils.standardDeviation(amplitudes);
-      amplitudeScore = (100 - (stdDev * 0.5)).clamp(0, 100);
-    }
-
-    // === STEP 5: Analisis Konsistensi Frekuensi (Jarak Antar Ombak) ===
-    double frequencyScore = 80; // Default
-    if (peakIndices.length >= 3) {
-      List<double> wavelengths = [];
-      
-      for (int i = 0; i < peakIndices.length - 1; i++) {
-        double distance = (peakIndices[i + 1] - peakIndices[i]).toDouble();
-        wavelengths.add(distance);
-      }
-      
-      double stdDev = ProcessorUtils.standardDeviation(wavelengths);
-      frequencyScore = (100 - (stdDev * 0.3)).clamp(0, 100);
-    }
-
-    // === SKOR FINAL ===
-    double finalScore = 0;
+    // 4. FINAL SCORING
+    double finalScore = (amplitudeScore * 0.4) + (frequencyScore * 0.4) + (smoothnessScore * 0.2);
     String feedback = "";
 
-    if (totalWaves < 2) {
-      finalScore = 30;
-      feedback = "Tidak terdeteksi pola ombak. Pastikan ada minimal 2-3 gelombang.";
-    } else {
-      // Bobot: Smoothness 40%, Amplitude 30%, Frequency 30%
-      finalScore = (smoothnessScore * 0.4) + (amplitudeScore * 0.3) + (frequencyScore * 0.3);
-      finalScore = finalScore.clamp(0, 100);
+    if (amplitudeScore < 60) feedback = "Tinggi ombak tidak rata.";
+    else if (frequencyScore < 60) feedback = "Lebar ombak berubah-ubah (Ritme rusak).";
+    else if (peaks.length < 3) feedback = "Terlalu pendek, buat ombak lebih panjang.";
+    else feedback = "Ombak yang indah! Ritme terjaga.";
 
-      if (finalScore > 85) {
-        feedback = "Sempurna! Ombak halus dan ritme terjaga dengan baik.";
-      } else if (smoothnessScore < 60) {
-        feedback = "Goresan terlihat gemetar. Relaks tangan dan gunakan gerakan dari pergelangan.";
-      } else if (amplitudeScore < 60) {
-        feedback = "Tinggi ombak tidak konsisten. Jaga amplitudo tetap sama.";
-      } else if (frequencyScore < 60) {
-        feedback = "Jarak antar ombak tidak konsisten. Pertahankan ritme yang stabil.";
-      } else {
-        feedback = "Ombak bagus, tingkatkan kehalusan gerakan.";
-      }
-    }
-
+    // 5. VISUALISASI
+    // Kita kirim sinyal garisnya + Titik Puncak sebagai marking
+    // Untuk visualisasi garis putus-putus atau titik puncak, kita bisa akali di sini.
+    // Tapi untuk sekarang kita kirim garis utamanya dulu.
+    
     return AnalysisResult(
       overallScore: finalScore,
-      verticalityScore: 0, // Tidak relevan
-      spacingScore: frequencyScore,
-      consistencyScore: amplitudeScore,
+      verticalityScore: amplitudeScore, // Kita pinjam istilah Verticality buat Tinggi Puncak
+      spacingScore: frequencyScore,     // Spacing buat Jarak Puncak
+      consistencyScore: finalScore,
       stabilityScore: smoothnessScore,
       feedback: feedback,
+      linesToDraw: [smoothSignal], 
     );
   }
 }

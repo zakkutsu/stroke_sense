@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:stroke_sense/models/exercise_module.dart';
 import 'package:stroke_sense/screens/camera_screen.dart';
 import 'package:stroke_sense/screens/history_screen.dart';
@@ -158,6 +159,7 @@ class HomeScreen extends StatelessWidget {
           ),
         ),
         onTap: () {
+          HapticFeedback.mediumImpact(); // Efek getaran saat tap
           Navigator.push(
             context,
             MaterialPageRoute(
