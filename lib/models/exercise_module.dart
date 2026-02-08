@@ -23,7 +23,7 @@ class ExerciseModule {
 }
 
 final List<ExerciseModule> exerciseList = [
-  // LEVEL 1: DASAR LINIER
+  // LEVEL 1: DASAR LINIER (Garis Lurus)
   ExerciseModule(
     id: 'pagar',
     title: 'Pagar',
@@ -52,43 +52,63 @@ final List<ExerciseModule> exerciseList = [
     category: 'Linear',
   ),
 
-  // LEVEL 2: DASAR GEOMETRI
-  ExerciseModule(
-    id: 'roda',
-    title: 'Roda',
-    symbol: 'OOOO',
-    description: 'Lingkaran penuh. Melatih keluwesan.',
-    icon: Icons.circle_outlined,
-    difficulty: Difficulty.medium,
-    category: 'Geometri',
-  ),
-  ExerciseModule(
-    id: 'telur',
-    title: 'Telur',
-    symbol: '0000',
-    description: 'Bentuk lonjong dasar huruf a, d, g.',
-    icon: Icons.egg_outlined,
-    difficulty: Difficulty.medium,
-    category: 'Geometri',
-  ),
-
-  // LEVEL 3: ALIRAN BERSAMBUNG
+  // LEVEL 2: LENGKUNGAN (Curves)
   ExerciseModule(
     id: 'ombak',
     title: 'Ombak',
     symbol: '~~~~',
-    description: 'Pola lengkung bersambung.',
+    description: 'Lengkung U bersambung. Melatih kehalusan.',
     icon: Icons.waves,
-    difficulty: Difficulty.hard,
-    category: 'Flow',
+    difficulty: Difficulty.medium,
+    category: 'Curve',
   ),
   ExerciseModule(
     id: 'kawat',
     title: 'Kawat',
     symbol: 'eeeee',
-    description: 'Pola putaran seperti kabel telepon.',
+    description: 'Loop bersambung seperti kabel telepon.',
     icon: Icons.all_inclusive,
+    difficulty: Difficulty.medium,
+    category: 'Curve',
+  ),
+
+  // LEVEL 3: BENTUK TERTUTUP (Shapes)
+  ExerciseModule(
+    id: 'roda',
+    title: 'Roda',
+    symbol: 'OOOO',
+    description: 'Lingkaran sempurna. Melatih keluwesan putar.',
+    icon: Icons.circle_outlined,
     difficulty: Difficulty.hard,
-    category: 'Flow',
+    category: 'Shape',
+  ),
+  ExerciseModule(
+    id: 'telur',
+    title: 'Telur',
+    symbol: '0000',
+    description: 'Oval lonjong. Dasar huruf a, d, g.',
+    icon: Icons.egg_outlined,
+    difficulty: Difficulty.hard,
+    category: 'Shape',
+  ),
+
+  // LEVEL 4: SUDUT TAJAM (Angles)  
+  ExerciseModule(
+    id: 'gergaji',
+    title: 'Gergaji',
+    symbol: '/\\/\\/\\',
+    description: 'Zigzag tajam. Melatih presisi sudut.',
+    icon: Icons.show_chart,
+    difficulty: Difficulty.hard,
+    category: 'Angle',
+  ),
+  ExerciseModule(
+    id: 'rintik',
+    title: 'Rintik',
+    symbol: '• • • •',
+    description: 'Titik-titik terpisah. Melatih tekanan pena.',
+    icon: Icons.more_horiz,
+    difficulty: Difficulty.easy,
+    category: 'Angle',
   ),
 ];

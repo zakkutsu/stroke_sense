@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // Untuk kIsWeb
 import 'package:stroke_sense/models/analysis_result.dart';
 import 'package:stroke_sense/models/exercise_module.dart';
+import 'package:stroke_sense/models/progress_record.dart';
+import 'package:stroke_sense/services/database_service.dart';
 
-class ResultScreen extends StatelessWidget {
+class ResultScreen extends StatefulWidget {
   final String imagePath;
   final ExerciseModule module;
   final AnalysisResult result;
@@ -17,10 +19,64 @@ class ResultScreen extends StatelessWidget {
   });
 
   @override
+  State<ResultScreen> createState() => _ResultScreenState();
+}
+
+class _ResultScreenState extends State<ResultScreen> {
+  bool _isSaved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-save saat screen dibuka
+    _saveProgress();
+  }
+
+  Future<void> _saveProgress() async {
+    if (_isSaved) return; // Prevent double save
+
+    try {
+      final record = ProgressRecord(
+        moduleId: widget.module.id,
+        moduleTitle: widget.module.title,
+        overallScore: widget.result.overallScore,
+        verticalityScore: widget.result.verticalityScore,
+        spacingScore: widget.result.spacingScore,
+        consistencyScore: widget.result.consistencyScore,
+        stabilityScore: widget.result.stabilityScore,
+        feedback: widget.result.feedback,
+        timestamp: DateTime.now(),
+        imagePath: widget.imagePath.isNotEmpty ? widget.imagePath : null,
+      );
+
+      await DatabaseService.instance.saveProgress(record);
+      
+      if (mounted) {
+        setState(() => _isSaved = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 10),
+                Text('Progress tersimpan!'),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error saving progress: $e');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     // Tentukan warna skor (Hijau=Bagus, Merah=Jelek)
-    Color scoreColor = result.overallScore >= 80 ? Colors.green : 
-                       (result.overallScore >= 50 ? Colors.orange : Colors.red);
+    Color scoreColor = widget.result.overallScore >= 80 ? Colors.green : 
+                       (widget.result.overallScore >= 50 ? Colors.orange : Colors.red);
 
     return Scaffold(
       appBar: AppBar(title: const Text("Hasil Analisis")),
@@ -37,7 +93,7 @@ class ResultScreen extends StatelessWidget {
                       child: Icon(Icons.image, size: 80, color: Colors.white54),
                     )
                   : Image.file(
-                      File(imagePath),
+                      File(widget.imagePath),
                       fit: BoxFit.contain, // Agar seluruh foto terlihat
                     ),
             ),
@@ -53,14 +109,14 @@ class ResultScreen extends StatelessWidget {
                       SizedBox(
                         width: 100, height: 100,
                         child: CircularProgressIndicator(
-                          value: result.overallScore / 100,
+                          value: widget.result.overallScore / 100,
                           strokeWidth: 10,
                           backgroundColor: Colors.grey[200],
                           color: scoreColor,
                         ),
                       ),
                       Text(
-                        "${result.overallScore.toInt()}",
+                        "${widget.result.overallScore.toInt()}",
                         style: TextStyle(
                           fontSize: 32, 
                           fontWeight: FontWeight.bold,
@@ -71,12 +127,12 @@ class ResultScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    "Kualitas Goresan: ${result.overallScore >= 80 ? 'Sangat Bagus!' : 'Perlu Latihan'}",
+                    "Kualitas Goresan: ${widget.result.overallScore >= 80 ? 'Sangat Bagus!' : 'Perlu Latihan'}",
                     style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    "Modul: ${module.title}",
+                    "Modul: ${widget.module.title}",
                     style: const TextStyle(color: Colors.grey),
                   ),
                 ],
@@ -94,10 +150,10 @@ class ResultScreen extends StatelessWidget {
                   const Text("Rincian Penilaian:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 15),
                   
-                  _buildScoreBar("Ketegakan (Verticality)", result.verticalityScore),
-                  _buildScoreBar("Jarak Spasi (Spacing)", result.spacingScore),
-                  _buildScoreBar("Konsistensi Tinggi", result.consistencyScore),
-                  _buildScoreBar("Kestabilan Tangan", result.stabilityScore),
+                  _buildScoreBar("Ketegakan (Verticality)", widget.result.verticalityScore),
+                  _buildScoreBar("Jarak Spasi (Spacing)", widget.result.spacingScore),
+                  _buildScoreBar("Konsistensi Tinggi", widget.result.consistencyScore),
+                  _buildScoreBar("Kestabilan Tangan", widget.result.stabilityScore),
                 ],
               ),
             ),
@@ -117,7 +173,7 @@ class ResultScreen extends StatelessWidget {
                 children: [
                   const Icon(Icons.lightbulb, color: Colors.blue),
                   const SizedBox(width: 15),
-                  Expanded(child: Text(result.feedback)),
+                  Expanded(child: Text(widget.result.feedback)),
                 ],
               ),
             ),

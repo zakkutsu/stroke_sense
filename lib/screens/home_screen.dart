@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:stroke_sense/models/exercise_module.dart';
 import 'package:stroke_sense/screens/camera_screen.dart';
+import 'package:stroke_sense/screens/history_screen.dart';
 import 'package:stroke_sense/widgets/global_help_sheet.dart';
 import 'package:stroke_sense/core/theme_provider.dart';
 import 'package:provider/provider.dart';
@@ -10,16 +11,28 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Kelompokkan data
+    // Kelompokkan data berdasarkan kategori baru (4 kategori)
     final linearModules = exerciseList.where((e) => e.category == 'Linear').toList();
-    final geoModules = exerciseList.where((e) => e.category == 'Geometri').toList();
-    final flowModules = exerciseList.where((e) => e.category == 'Flow').toList();
+    final curveModules = exerciseList.where((e) => e.category == 'Curve').toList();
+    final shapeModules = exerciseList.where((e) => e.category == 'Shape').toList();
+    final angleModules = exerciseList.where((e) => e.category == 'Angle').toList();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text("StrokeSense"),
         // centerTitle & backgroundColor sudah diatur di AppTheme
         actions: [
+          // TOMBOL RIWAYAT
+          IconButton(
+            icon: const Icon(Icons.history, size: 28),
+            tooltip: 'Riwayat Latihan',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const HistoryScreen()),
+              );
+            },
+          ),
           // TOMBOL TOGGLE DARK/LIGHT MODE
           Consumer<ThemeProvider>(
             builder: (context, themeProvider, child) {
@@ -45,16 +58,20 @@ class HomeScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildSectionHeader("Level 1: Dasar Linier"),
+          _buildSectionHeader("Level 1: Garis Lurus"),
           ...linearModules.map((e) => _buildExerciseCard(context, e)),
 
           const SizedBox(height: 20),
-          _buildSectionHeader("Level 2: Dasar Geometri"),
-          ...geoModules.map((e) => _buildExerciseCard(context, e)),
+          _buildSectionHeader("Level 2: Lengkungan"),
+          ...curveModules.map((e) => _buildExerciseCard(context, e)),
 
           const SizedBox(height: 20),
-          _buildSectionHeader("Level 3: Aliran Bersambung"),
-          ...flowModules.map((e) => _buildExerciseCard(context, e)),
+          _buildSectionHeader("Level 3: Bentuk Tertutup"),
+          ...shapeModules.map((e) => _buildExerciseCard(context, e)),
+
+          const SizedBox(height: 20),
+          _buildSectionHeader("Level 4: Sudut & Presisi"),
+          ...angleModules.map((e) => _buildExerciseCard(context, e)),
           
           const SizedBox(height: 40),
         ],
